@@ -1,12 +1,18 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, HTTPException, Header
 from pydantic import BaseModel
 import bcrypt
-from jose import jwt
+from jose import jwt, JWTError
 from datetime import datetime, timedelta, timezone
 
 SECRET_KEY = "change-me-later"   # deliberately bad for now — we'll fix this
-ALGORITHM = "HS256"
+ALGORITHM = "RS256"
 ACCESS_TOKEN_TTL_MINUTES = 15
+
+with open("private_key.pem") as f:
+    PRIVATE_KEY = f.read()
+
+with open("public_key.pem") as f:
+    PUBLIC_KEY = f.read()
 
 def create_access_token(email: str) -> str:
     now = datetime.now(timezone.utc)
@@ -15,7 +21,7 @@ def create_access_token(email: str) -> str:
         "iat": now,                                       # issued at
         "exp": now + timedelta(minutes=ACCESS_TOKEN_TTL_MINUTES),  # expiry
     }
-    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+    return jwt.encode(payload, PRIVATE_KEY, algorithm=ALGORITHM)
 
 app = FastAPI()
 
@@ -59,3 +65,19 @@ def login(req: LoginRequest):
     
     token = create_access_token(email=req.email)
     return {"access_token": token, "token_type": "bearer"}
+
+def get_current_user(authorization: str = Header(None)) -> str:
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="missing or malformed token")
+    
+    token = authorization.removeprefix("Bearer ")
+    try:
+        payload = jwt.decode(token, PUBLIC_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        raise HTTPException(status_code=401, detail="invalid or expired token")
+    
+    return payload["sub"]  # the email
+
+@app.get("/me")
+def me(current_user: str = Depends(get_current_user)):
+    return {"email": current_user}
