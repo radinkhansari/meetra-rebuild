@@ -1,6 +1,21 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 import bcrypt
+from jose import jwt
+from datetime import datetime, timedelta, timezone
+
+SECRET_KEY = "change-me-later"   # deliberately bad for now — we'll fix this
+ALGORITHM = "HS256"
+ACCESS_TOKEN_TTL_MINUTES = 15
+
+def create_access_token(email: str) -> str:
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": email,                                    # "subject" - who this token is about
+        "iat": now,                                       # issued at
+        "exp": now + timedelta(minutes=ACCESS_TOKEN_TTL_MINUTES),  # expiry
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 app = FastAPI()
 
@@ -42,4 +57,5 @@ def login(req: LoginRequest):
     if not bcrypt.checkpw(password_bytes, user["hashed_password"]):
         return {"error": "invalid credentials"}
     
-    return {"message": "login successful", "email": req.email}
+    token = create_access_token(email=req.email)
+    return {"access_token": token, "token_type": "bearer"}
