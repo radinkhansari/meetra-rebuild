@@ -5,6 +5,9 @@ from jose import jwt, JWTError
 from datetime import datetime, timedelta, timezone
 import secrets
 import hashlib
+from sqlalchemy.orm import Session
+from db import SessionLocal
+from models import User
 
 ALGORITHM = "RS256"
 ACCESS_TOKEN_TTL_MINUTES = 15
@@ -23,6 +26,13 @@ app = FastAPI()
 def health():
     return {"status": "ok"}
 
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
 
 # ---------- users ----------
 
@@ -31,18 +41,22 @@ class RegisterRequest(BaseModel):
     password: str
 
 # in-memory "database" — just a dict for now, no real DB yet
-fake_users_db: dict[str, dict] = {}
 
 @app.post("/register")
-def register(req: RegisterRequest):
-    if req.email in fake_users_db:
+def register(req: RegisterRequest, db: Session = Depends(get_db)):
+    existing = db.query(User).filter(User.email == req.email).first()
+    if existing is not None:
         return {"error": "user already exists"}
 
     password_bytes = req.password.encode("utf-8")
     hashed = bcrypt.hashpw(password_bytes, bcrypt.gensalt())
 
-    fake_users_db[req.email] = {"email": req.email, "hashed_password": hashed}
-    return {"message": "registered", "user": {"email": req.email}}
+    new_user = User(email=req.email, hashed_password=hashed.decode("utf-8"))
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    return {"message": "registered", "user": {"email": new_user.email}}
 
 # since fake_users_db is a in-memory "database", it restarts evey time you restrat the server.
 
@@ -108,17 +122,17 @@ class LoginRequest(BaseModel):
     password: str
 
 @app.post("/login")
-def login(req: LoginRequest):
-    user = fake_users_db.get(req.email)
+def login(req: LoginRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == req.email).first()
     if user is None:
         return {"error": "invalid credentials"}
 
     password_bytes = req.password.encode("utf-8")
-    if not bcrypt.checkpw(password_bytes, user["hashed_password"]):
+    if not bcrypt.checkpw(password_bytes, user.hashed_password.encode("utf-8")):
         return {"error": "invalid credentials"}
 
-    access_token = create_access_token(email=req.email)
-    refresh_token = create_refresh_token(email=req.email)
+    access_token = create_access_token(email=user.email)
+    refresh_token = create_refresh_token(email=user.email)
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
